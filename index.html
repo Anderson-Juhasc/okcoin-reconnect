@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<meta charset="utf-8" />
+<title>WebSocket Test</title>
+<script type="text/javascript" src="MD5.js"></script>
+<script type="text/javascript">
+
+    window.addEventListener("load", function() {
+        OKCoinReconnect('cn', '', '');
+    }, false);
+
+    /**
+     * Constructor
+     * @param {string} site
+     * @param {string} api_key
+     * @param {string} api_pass
+     * @param {string} pair
+     */
+    function OKCoinReconnect(site, api_key, secret_key, pair) {
+        var self = this;
+
+        self.site = site;
+        self.api_key = api_key; //用户申请api_key
+        self.secret_key = secret_key;//用户申请 secret_key
+        self.lastHeartBeat = new Date().getTime();
+        self.overtime = 8000;
+        self.socketUri = self.site === 'com'
+            ? 'wss://real.okcoin.com:10440/websocket/okcoinapi'
+                : 'wss://real.okcoin.cn:10440/websocket/okcoinapi';
+
+        self.pair = pair || null;
+
+
+        var output;
+
+        init();
+
+        function init() {
+            output = document.getElementById("output");
+
+            testWebSocket();
+
+            setInterval(checkConnect, 5000);
+        }
+
+       function checkConnect() {
+            var time = new Date().getTime();
+
+            self.ws.send("{'event':'ping'}");
+
+            if ((time - self.lastHeartBeat) > self.overtime) {
+                console.log("socket 连接断开，正在尝试重新建立连接");
+                testWebSocket();
+            }
+        }
+
+        function testWebSocket() {
+            var ws = new WebSocket(self.socketUri);
+
+            self.ws = ws;
+
+            ws.onopen = function(evt) {
+                onOpen(evt)
+            }
+            ws.onclose = function(evt) {
+                onClose(evt)
+            }
+            ws.onmessage = function(evt) {
+               onMessage(evt)
+            }
+            ws.onerror = function(evt) {
+                onError(evt)
+            }
+        }
+
+        function onOpen(evt) {
+            console.log("CONNECTED");
+            //spotUserInfo();
+            self.ws.send("{'event':'addChannel','channel':'ok_btccny_ticker'}");
+        }
+
+        function onClose(evt) {
+            console.log("DISCONNECTED");
+        }
+
+        function onMessage(evt) {
+            var myList = evt.data;
+            var array = JSON.parse(myList)
+            var result = array.event;
+            var isTrade = false;
+            var isCancelOrder = false;
+
+            console.log(myList);
+            console.log(new Date().getTime());
+
+            for (var i = 0; i < array.length; i++) {
+                for (var index in array[i]) {
+                    var channel = array[i][index];
+                    var order_id = channel.order_id;
+
+                    console.log(channel);
+
+                    if (channel == 'ok_spotusd_trade' || channel == 'ok_spotcny_trade') {
+                        isTrade = true;
+                    } else if (channel == 'ok_spotusd_cancel_order' || channel == 'ok_spotcny_cancel_order') {
+                        isCancelOrder = true;
+                    }
+
+                    if (typeof(order_id) != 'undefined') {
+                        if (isTrade) {
+                            //下单成功 业务代码
+                            console.log("orderId is  " + order_id);
+                        } else if (isCancelOrder) {
+                            //取消订单成功 业务代码
+                            console.log("order  " + order_id + " is now cancled");
+                        }
+                    }
+                }
+             }
+
+             if (result == 'pong') {
+                self.lastHeartBeat = new Date().getTime();
+             } else {
+                createTable(array);
+             }
+
+        }
+
+        function onError(evt) {
+            console.log('ERROR: '+ evt.data);
+        }
+    }
+
+    var stringifyToOKCoinFormat = function(obj) {
+        var arr = [],
+            i,
+            formattedObject = '';
+
+        for (i in obj) {
+            if (obj.hasOwnProperty(i)) {
+                arr.push(i);
+            }
+        }
+
+        arr.sort();
+
+        for (i = 0; i < arr.length; i++) {
+            if (i != 0) {
+                formattedObject += '&';
+            }
+
+            formattedObject += arr[i] + '=' + obj[arr[i]];
+        }
+
+        return formattedObject;
+    };
+
+    var sign = function(params, secret_key) {
+        return MD5(stringifyToOKCoinFormat(params) + '&secret_key=' + secret_key);
+    };
+
+    var send = function(channel, params) {
+        params = params ? params : {};
+        params['api_key'] = self.api_key;
+        params['sign'] = sign(params, self.secret_key);
+
+        var data = {'event':'addChannel', 'channel':channel, 'parameters':params};
+
+        console.log(data);
+
+        self.ws.send(JSON.stringify(data));
+    }
+
+
+    var spotUserInfo = function() {
+        var channel = self.site === 'com' ? 'ok_spotusd_userinfo' : 'ok_spotcny_userinfo';
+
+        send(channel);
+    }
+
+
+    //现货下单
+    function spotTrade() {
+	var sign = MD5("amount=0.1&api_key="+api_key+"&symbol=ltc_usd&type=sell_market&secret_key="+secret_key);
+        doSend("{'event':'addChannel','channel':'ok_spotusd_trade','parameters':{'api_key':'"+api_key+"','sign':'"+sign+"','symbol':'ltc_usd','type':'sell_market','amount':0.1}}");
+    }
+
+    //现货取消订单
+    function spotCancelOrder(orderId) {
+	var sign = MD5("api_key="+api_key+"&order_id="+orderId+"&symbol=ltc_usd&secret_key="+secret_key);
+	doSend("{'event':'addChannel','channel':'ok_spotusd_cancel_order','parameters':{'api_key':'"+api_key+"','sign':'"+sign+"','symbol':'ltc_usd','order_id':'"+orderId+"'}}");
+    }
+
+    //期货下单
+    function futureTrade() {
+	var sign = MD5("amount=1&api_key="+api_key+"&contract_type=this_week&lever_rate=20&match_price=1&price=1.5&symbol=ltc_usd&type=0&secret_key="+secret_key);
+	doSend("{'event': 'addChannel','channel':'ok_futuresusd_trade','parameters': {'api_key': '"+api_key+"','sign': '"+sign+"','symbol': 'ltc_usd','contract_type': 'this_week','amount': '1','price': '1.5','type': '0','match_price': '1','lever_rate': '20'}}");
+    }
+
+    //期货取消订单
+    function futureCancelOrder(orderId) {
+	var sign = MD5("api_key="+api_key+"&contract_type=this_week&order_id="+orderId+"&symbol=ltc_usd&secret_key="+secret_key);
+        doSend("{'event': 'addChannel','channel': 'ok_futuresusd_cancel_order','parameters': {'api_key': '"+api_key+"','sign': '"+sign+"','symbol': 'ltc_usd','order_id': '"+orderId+"','contract_type': 'this_week'}}");
+    }
+
+    //期货个人信息
+    function futureUserInfo(){
+	var sign = MD5("api_key="+api_key+"&secret_key="+secret_key);
+	doSend("{'event':'addChannel','channel':'ok_futureusd_userinfo','parameters' :{'api_key':'"+api_key+"','sign':'"+sign+"'}}");
+    }
+
+    //现货个人信息
+
+    //现货实时交易
+    function ok_usd_realtrades(){
+	var sign = MD5("api_key="+api_key+"&secret_key="+secret_key);
+	doSend("{'event':'addChannel','channel':'ok_usd_realtrades','parameters':{'api_key':'"+api_key+"','sign':'"+sign+"'}}");
+    }
+    //期货实时交易
+    function ok_usd_future_realtrades(){
+	 var sign = MD5("api_key="+api_key+"&secret_key="+secret_key);
+	 doSend("{'event':'addChannel','channel':'ok_usd_future_realtrades','parameters':{'api_key':'"+api_key+"','sign':'"+sign+"'}}");
+    }
+
+    function createTable(array){
+        var  str='<h2 id="th2">WebSocket Test</h2><table id="tdata" border="1"><tr id="tr1">';
+        for (var index in array[0]) {
+            str += '<th>' + index + '</th>';
+        }
+        str += '</tr><tr id="tr2">';
+
+    	for (var i = 0; i < array.length; i++) {
+
+        	for (var index in array[i]) {
+        	     var temp=array[i][index];
+                     str += '<td>';
+                     var tem=JSON.stringify(temp);
+                     str += tem;
+                     str += '</td>';
+                }
+                str += '</tr>';
+    	}
+    	str += '</table>';
+    	removeTable('tdata');
+     	document.write(str);
+     }
+
+     function removeTable(id){
+        var tbl = document.getElementById(id);
+        if(tbl) tbl.parentNode.removeChild(tbl);
+        var tt = document.getElementById('th2');
+        if(tt) tt.parentNode.removeChild(tt);
+     }
+
+</script>
+<body>
+
+</body>
+<div id="status"></div>
+<div id="output"></div>
+</html>
